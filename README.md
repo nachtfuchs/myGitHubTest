@@ -11,5 +11,5 @@ https://github.com/udacity/CarND-Advanced-Lane-Lines needs to be in the same dir
 the jupyter notebook. Once the jupyter notebook has access to the image files, it should
 run successfully each cell.
 
-This GitHub repository is used to provide access to the video file where lane lines are
-identified by my image processing pipeline.
+This GitHub repository is used to provide access to the video file project_video_identified_lanes.avi
+where lane lines are identified by my image processing pipeline.
