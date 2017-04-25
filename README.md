@@ -15,3 +15,5 @@ This GitHub repository is also used to provide access to the video file project_
 where lane lines are identified by my image processing pipeline. It is the output video that is required for the project to pass.
 
 The source.py file performs a camera calibration using the images from the mentioned udacity repository. Furthermore, it contains the lane line processing steps from the jupyter notebook but it was structured to be used within a script instead of a notebook. For example, there are no plots for the different steps available. The only thing that is displayed is the final image with the estimated lane lines.
+**Adaptations for the video processing**
+In the shady areas of the video, the right lane line tended to wobble significantly. So I introduced a class CLine that would save major information about a lane line, just as it was introduced in the lessons. Additionally, I used line parameters from previous images to smoothen the lane line. This was done by the function averageLaneLines(). It helped to reduce significantly the wobbling lane lines.
