@@ -8,6 +8,59 @@ import pickle
 
 print('Import successful.')
 
+# Define a class to receive the characteristics of each line detection
+class CLine():
+    def __init__(self):
+        # was the line detected in the last iteration?
+        self.detected = False  
+        # x values of the last n fits of the line
+        self.recent_xfitted = [] 
+        #average x values of the fitted line over the last n iterations
+        self.bestx = None     
+        #polynomial coefficients averaged over the last n iterations
+        self.best_fit = None
+        #polynomial coefficients over the last n iterations
+        self.coeff_history = None
+        #polynomial coefficients for the most recent fit
+        self.current_fit = [np.array([False])]  
+        #radius of curvature of the line in some units
+        self.radius_of_curvature = None 
+        #distance in meters of vehicle center from the line
+        self.line_base_pos = None 
+        #difference in fit coefficients between last and new fits
+        self.diffs = np.array([0,0,0], dtype='float') 
+        #x values for detected line pixels
+        self.allx = None  
+        #y values for detected line pixels
+        self.ally = None
+
+    def Input(self, current_fit):
+        # if no match was found, use the last coefficients
+        if current_fit == None:
+            current_fit = self.coeff_history[-1]
+        else:
+            self.current_fit = current_fit
+            #store the coefficients
+            if self.coeff_history == None: 
+                # the first coefficients will be stored as current_fit, to avoid "None" in the history
+                self.coeff_history = current_fit
+            else:
+                # accumulate the coefficients
+                self.coeff_history = np.vstack((self.coeff_history, current_fit))
+    
+    def AveragingParameters(self, n = 3):
+        # average the parameters of the last n fits
+        try:
+            # works only if self.coeff_history has more than one set of parameters. Set the very 
+            self.best_fit = np.mean(self.coeff_history[ -n:, :], axis = 0)
+        except IndexError:
+            # catches the very first entry
+            self.best_fit = self.current_fit
+        except TypeError:
+            # catches the very first entry in case of type errors
+            self.best_fit = self.current_fit
+        return self.best_fit
+        
 #####################
 def abs_sobel_thresh(img, orient='x', thresh_min=0, thresh_max=255):
     ''' @brief  This functions performs the sobel operator in x or y direction
@@ -70,6 +123,18 @@ def hls_select(img, s_thresh=(0, 255), l_thresh =(0, 255)):
     binary_output[ (binary_S_output == 1) & (binary_L_output == 1)] = 1 
     # 3) Return a binary image of threshold result
     return binary_output
+
+# Function to reject the point outliers by comparing to the median value
+def RejectOutlier(x_array, y_array):
+    median = np.median(x_array)
+    dev = x_array - median
+    ind = []
+    for i, x in enumerate(dev):
+        if abs(x) > 200:
+            ind.append(i)
+    x_array = np.delete(x_array, ind)
+    y_array = np.delete(y_array, ind)
+    return x_array, y_array
 
 def fit_lane_lines(binary_warped, nwindows = 9, margin = 100, minpix = 100):
     ''' @brief Find lane lines for an input warped image.
@@ -140,16 +205,50 @@ def fit_lane_lines(binary_warped, nwindows = 9, margin = 100, minpix = 100):
     
     # Extract left and right line pixel positions
     leftx = nonzerox[left_lane_inds]
-    lefty = nonzeroy[left_lane_inds] 
+    lefty = nonzeroy[left_lane_inds]
+    leftx, lefty = RejectOutlier(leftx, lefty)
+    
     rightx = nonzerox[right_lane_inds]
-    righty = nonzeroy[right_lane_inds] 
+    righty = nonzeroy[right_lane_inds]
+    rightx, righty = RejectOutlier(rightx, righty)
     
     # Fit a second order polynomial to each
     left_fit = np.polyfit(lefty, leftx, 2)
     right_fit = np.polyfit(righty, rightx, 2)
     
     return left_fit, right_fit
+
+def averageLaneLines(line_fit, line_object):
+    ''' @brief  Average the lane line for a given object line_object of class CLine 
+                and a line fit, which is a set of parameters
+        
+        @input line_fit A set of parameters for a line. E.g. for parabola: (1, 2, 0)
+        @input line_object Object of CLine
+    '''
+    result = line_object.AveragingParameters(line_fit, n = 3)
+    return result
+
+def CompareParameters(current_fit, line_object, rtol = 0.1, atol = 0.5):
+    ''' @brief  Compare parameters of the current set with the set from the step before.
+                Accept new parameter sets only if they are within a certain boundary of
+                the old parameter set.
+        @input current_fit Current parameter set E.g. for parabola: (1, 2, 0)
+    '''
+    # Deal with the very first element
+    if line_object.current_fit[0] == False:
+        return current_fit
+    else:
+        # handle all the rest, by comparison
+        arr_equal = np.allclose(current_fit, line_object.current_fit, rtol, atol)
+        if arr_equal == True:
+            # accept the current value
+            return current_fit
+        else:
+            # return the old value 
+            return line_object.current_fit
     
+    
+
 #####################
 # load the paths to the filenames
 file_list = os.listdir(r".\camera_cal")
@@ -238,7 +337,11 @@ cap = cv2.VideoCapture('project_video.mp4')
 height , width , layers =  img.shape #used for creating a video
 fourcc = cv2.VideoWriter_fourcc(*'DIVX')
 video = cv2.VideoWriter('project_video_identified_lanes.avi', fourcc, 25.0,(width,height))
-print(1)
+
+#instantiation
+left_line = CLine()
+right_line = CLine()
+
 # run the algorithm on the images
 while(True):
 
@@ -253,14 +356,12 @@ while(True):
     # apply the preprocessing
     grad_x = abs_sobel_thresh(img_undist, orient='x', thresh_min = 25, thresh_max = 255)
     grad_y = abs_sobel_thresh(img_undist, orient='y', thresh_min = 25, thresh_max = 255)
-    color_binary = hls_select(img_undist, s_thresh = (100, 255), l_thresh = (0, 255))
+    color_binary = hls_select(img_undist, s_thresh = (100, 255), l_thresh = (100, 255))
     # combine the binary images
     img_preprocessed[(grad_x == 1) & (grad_y == 1) | (color_binary == 1)] =255 
     
     # perform perspective transformation to bird's eye view
     img_warped = cv2.warpPerspective(img_preprocessed, M, img_size, flags = cv2.INTER_LINEAR)
-    # apply direction thresholding -> I did not see significant advantages in applying this method, yet.
-    # img_warped = dir_threshold(img_warped, sobel_kernel = 3, thresh = (np.pi/4, 3*np.pi/4))
     
     # Create an image to draw the lines on
     warp_zero = np.zeros_like(img_warped).astype(np.uint8)
@@ -270,16 +371,28 @@ while(True):
     lane_fit = fit_lane_lines(img_warped, nwindows = 9, margin = 100, minpix = 50)
     
     # calculate the polynomial fit
-    left_fit = lane_fit[0] # left lane parameters as a parabola
-    right_fit = lane_fit[1] # left lane parameters as a parabola
+    left_fit_raw = lane_fit[0] # left lane parameters as a parabola
+    right_fit_raw = lane_fit[1] # left lane parameters as a parabola
+
+    # compare the current fit with the previous fit
+#     left_fit_comp = CompareParameters(left_fit_raw, left_line)
+#     right_fit_comp = CompareParameters(right_fit_raw, right_line)    
+    
+    # store the either the current fit or the last accepted fit in the line object
+    left_line.Input(left_fit_raw)
+    right_line.Input(right_fit_raw)
+    
+    # Smoothen the lane line parameters using previous coefficients
+    left_fit = left_line.AveragingParameters(n = 10)
+    right_fit = right_line.AveragingParameters(n = 10)
     
     # calculate the x values for all y-values (-> one x for one y pixel)
     left_fit_x = left_fit[0] * ploty**2 + left_fit[1] * ploty + left_fit[2]
     right_fit_x = right_fit[0] * ploty**2 + right_fit[1] * ploty + right_fit[2]
     
     # Fit new polynomials to x,y in world space
-    left_fit_cr = np.polyfit(np.array(ploty, np.uint8)*ym_per_pix, np.array(left_fit_x, np.uint8)*xm_per_pix, 2)
-    right_fit_cr = np.polyfit(np.array(ploty, np.uint8)*ym_per_pix, np.array(right_fit_x, np.uint8)*xm_per_pix, 2)
+    left_fit_cr = np.polyfit(ploty*ym_per_pix,left_fit_x*xm_per_pix, 2)
+    right_fit_cr = np.polyfit(ploty*ym_per_pix, right_fit_x*xm_per_pix, 2)
     # Calculate the new radii of curvature
     left_curverad = ((1 + (2*left_fit_cr[0]*y_eval*ym_per_pix + left_fit_cr[1])**2)**1.5) / np.absolute(2*left_fit_cr[0])
     right_curverad = ((1 + (2*right_fit_cr[0]*y_eval*ym_per_pix + right_fit_cr[1])**2)**1.5) / np.absolute(2*right_fit_cr[0])
@@ -316,8 +429,9 @@ while(True):
         break
 
 # When everything done, release the capture
+print('Processing finished.')
 video.release()
 cap.release()
 cv2.destroyAllWindows()
-print('Processing finished.')
+
     
